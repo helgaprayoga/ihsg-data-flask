@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard IHSG</title>
+  <!-- Memuat library Chart.js dari CDN. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f3f6f6; color: #1c2128; }
+    header { background: #0e3b3d; color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+    h1 { font-size: 20px; margin: 0; }
+    main { padding: 24px; display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+    @media (max-width: 700px) { main { grid-template-columns: 1fr; } .stat { flex-direction: column; } }
+    .kartu { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .stat { display: flex; gap: 16px; grid-column: 1 / -1; }
+    .stat .kartu { flex: 1; }
+    .angka { font-size: 30px; font-weight: bold; color: #0f8f7e; }
+    .kecil { font-size: 13px; font-weight: normal; margin-left: 6px; }
+    .naik { color: #16a34a; }
+    .turun { color: #dc2626; }
+    .lebar { grid-column: 1 / -1; }
+    h2 { font-size: 15px; margin: 0 0 12px; }
+    .grafik { position: relative; height: 260px; }
+    .grafik.tinggi { height: 320px; }
+  </style>
+</head>
+<body>
+  <!-- Header berisi judul dan pilihan periode. -->
+  <header>
+    <h1>Dashboard IHSG</h1>
+    <label>Periode:
+      <select id="periode">
+        <option value="1y">1 Tahun</option>
+        <option value="3y">3 Tahun</option>
+        <option value="5y" selected>5 Tahun</option>
+        <option value="all">Semua</option>
+      </select>
+    </label>
+  </header>
+
+  <main>
+    <!-- Empat kartu angka ringkasan. -->
+    <section class="stat">
+      <div class="kartu"><div class="angka" id="hari">-</div>Hari bursa</div>
+      <div class="kartu">
+        <div class="angka"><span id="close">-</span><span class="kecil" id="harian"></span></div>
+        Close terakhir
+      </div>
+      <div class="kartu"><div class="angka" id="ret">-</div>Return periode</div>
+      <div class="kartu"><div class="angka" id="vol">-</div>Volume rata-rata (miliar)</div>
+    </section>
+
+    <!-- Grafik batang return per tahun. -->
+    <section class="kartu">
+      <h2>Return per tahun</h2>
+      <div class="grafik"><canvas id="grafikTahunan"></canvas></div>
+    </section>
+    <!-- Grafik donat distribusi arah harian. -->
+    <section class="kartu">
+      <h2>Distribusi hari naik / turun</h2>
+      <div class="grafik"><canvas id="grafikArah"></canvas></div>
+    </section>
+    <!-- Grafik garis tren harga beserta MA20 dan MA50. -->
+    <section class="kartu lebar">
+      <h2>Tren harga IHSG (close, MA20, MA50)</h2>
+      <div class="grafik tinggi"><canvas id="grafikHarga"></canvas></div>
+    </section>
+  </main>
+
+  <script>
+    // Menjaga tinggi grafik mengikuti elemen pembungkus.
+    Chart.defaults.maintainAspectRatio = false;
+
+    // Format angka gaya Indonesia dan wadah penyimpan instance grafik.
+    const angka = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 });
+    const grafik = {};
+
+    // Menghapus grafik lama lalu membuat grafik baru pada canvas yang sama.
+    function gambar(id, config) {
+      if (grafik[id]) grafik[id].destroy();
+      grafik[id] = new Chart(document.getElementById(id), config);
+    }
+
+    // Menambahkan tanda plus untuk angka positif dan akhiran persen.
+    function tanda(n, satuan = "%") {
+      return (n > 0 ? "+" : "") + angka.format(n) + satuan;
+    }
+
+    // Memilih kelas warna hijau untuk nilai positif dan merah untuk negatif.
+    function warnaiLedakan(n) {
+      return n >= 0 ? "naik" : "turun";
+    }
+
+    // Mengambil data dari API lalu menggambar semua kartu dan grafik.
+    async function muatData() {
+      const q = "?periode=" + document.getElementById("periode").value;
+
+      // Mengisi empat kartu statistik dari endpoint ringkasan.
+      const ringkasan = await (await fetch("/api/ringkasan" + q)).json();
+      document.getElementById("hari").textContent = angka.format(ringkasan.hari);
+      document.getElementById("close").textContent = angka.format(ringkasan.close);
+      document.getElementById("vol").textContent = angka.format(ringkasan.volume_rata);
+
+      const ret = document.getElementById("ret");
+      ret.textContent = tanda(ringkasan.return_periode);
+      ret.className = "angka " + warnaiLedakan(ringkasan.return_periode);
+
+      const harian = document.getElementById("harian");
+      harian.textContent = tanda(ringkasan.perubahan_harian);
+      harian.className = "kecil " + warnaiLedakan(ringkasan.perubahan_harian);
+
+      // Menggambar grafik batang return per tahun dengan warna sesuai tanda.
+      const tahunan = await (await fetch("/api/return-tahunan" + q)).json();
+      gambar("grafikTahunan", {
+        type: "bar",
+        data: {
+          labels: tahunan.labels,
+          datasets: [{
+            label: "Return (%)",
+            data: tahunan.data,
+            backgroundColor: tahunan.data.map((v) => (v >= 0 ? "#16a34a" : "#dc2626")),
+            borderRadius: 4
+          }]
+        },
+        options: {
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: (c) => tanda(c.parsed.y) } }
+          },
+          scales: { y: { ticks: { callback: (v) => v + "%" } } }
+        }
+      });
+
+      // Menggambar grafik donat jumlah hari naik, turun, dan stagnan.
+      const arah = await (await fetch("/api/distribusi-arah" + q)).json();
+      gambar("grafikArah", {
+        type: "doughnut",
+        data: {
+          labels: arah.labels,
+          datasets: [{
+            data: arah.data,
+            backgroundColor: ["#16a34a", "#dc2626", "#9ca3af"]
+          }]
+        },
+        options: { plugins: { legend: { position: "bottom" } } }
+      });
+
+      // Menggambar grafik garis close, MA20, dan MA50.
+      const harga = await (await fetch("/api/tren-harga" + q)).json();
+      gambar("grafikHarga", {
+        type: "line",
+        data: {
+          labels: harga.labels,
+          datasets: [
+            { label: "Close", data: harga.close, borderColor: "#0f8f7e", borderWidth: 1.6, pointRadius: 0, tension: 0.15 },
+            { label: "MA20", data: harga.ma20, borderColor: "#f2a93b", borderWidth: 1.2, pointRadius: 0, spanGaps: true },
+            { label: "MA50", data: harga.ma50, borderColor: "#e4572e", borderWidth: 1.2, pointRadius: 0, spanGaps: true }
+          ]
+        },
+        options: {
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: { position: "bottom" } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } },
+            y: { ticks: { callback: (v) => angka.format(v) } }
+          }
+        }
+      });
+    }
+
+    // Memuat ulang data setiap periode diganti dan saat halaman dibuka.
+    document.getElementById("periode").addEventListener("change", muatData);
+    muatData();
+  </script>
+</body>
+</html>
